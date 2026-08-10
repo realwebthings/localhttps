@@ -1,5 +1,5 @@
 #!/bin/bash
-# local-https installer
+# localhttps installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/realwebthings/localhttps/main/install.sh | bash
 
 set -e

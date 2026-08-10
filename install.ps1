@@ -1,4 +1,4 @@
-# local-https installer for Windows
+# localhttps installer for Windows
 # Usage (PowerShell as Administrator):
 #   irm https://raw.githubusercontent.com/realwebthings/localhttps/main/install.ps1 | iex
 
@@ -13,7 +13,7 @@ function Spacer { Write-Host "" }
 Clear-Host
 Spacer
 Info "╔══════════════════════════════════════════════╗"
-Info "║        local-https interactive setup         ║"
+Info "║         localhttps interactive setup         ║"
 Info "╚══════════════════════════════════════════════╝"
 Spacer
 Write-Host "  This tool will:"
@@ -51,7 +51,7 @@ Spacer
 Write-Host "  Where should the SSL certificate files be saved?"
 Write-Host "  Tip: keep them outside your project so you never accidentally commit them."
 Spacer
-$DEFAULT_CERT_DIR = "$env:USERPROFILE\.local-https-certs"
+$DEFAULT_CERT_DIR = "$env:USERPROFILE\.localhttps\certs"
 $CERT_DIR = Read-Host "  Directory [default: $DEFAULT_CERT_DIR]"
 if (-not $CERT_DIR) { $CERT_DIR = $DEFAULT_CERT_DIR }
 Spacer
