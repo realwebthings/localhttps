@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.2] - 2026-08-10
+
+- Merge pull request #2 from realwebthings/setup-pr-required
+All notable changes to this project are documented in this file.
+
 ## [0.0.1] - 2026-08-10
 
 - feat: add initial implementation of local-https installer and CLI tool
