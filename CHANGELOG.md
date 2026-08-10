@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.1] - 2026-08-10
+
+- feat: add initial implementation of local-https installer and CLI tool
+All notable changes to this project are documented in this file.
+
 ## [1.0.1] - 2026-08-09
 
 - fix: read prompts from /dev/tty so curl|bash install works, correct install.ps1 repo URL
