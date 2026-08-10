@@ -1,4 +1,4 @@
-# local-https
+# localhttps
 
 Map any local port to any custom domain with a trusted HTTPS certificate — no browser warnings.
 
