@@ -104,6 +104,15 @@ ensure_hosts() {
   log "Added $domain to /etc/hosts"
 }
 
+remove_hosts() {
+  local domain="$1"
+  grep -q "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts || return
+  grep -v "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts | sudo tee /etc/hosts.new > /dev/null
+  sudo cp /etc/hosts.new /etc/hosts
+  sudo rm -f /etc/hosts.new
+  log "Removed $domain from /etc/hosts"
+}
+
 ensure_cert() {
   local domain="$1"
   if [ -f "$CERT_DIR/$domain.pem" ] && [ -f "$CERT_DIR/$domain-key.pem" ]; then
@@ -187,6 +196,7 @@ cmd_stop() {
     else
       sudo rm -f "$conf" "$NGINX_ENABLED_DIR/localhttps-$d.conf"
     fi
+    remove_hosts "$d"
     if [ -f "$STATE_DIR/active_domains" ]; then
       grep -v -x "$d" "$STATE_DIR/active_domains" > "$STATE_DIR/active_domains.tmp" || true
       mv "$STATE_DIR/active_domains.tmp" "$STATE_DIR/active_domains"
