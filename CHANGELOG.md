@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.3] - 2026-08-11
+
+- Merge pull request #3 from realwebthings/setup-pr-required
+All notable changes to this project are documented in this file.
+
 ## [0.0.2] - 2026-08-10
 
 - Merge pull request #2 from realwebthings/setup-pr-required
