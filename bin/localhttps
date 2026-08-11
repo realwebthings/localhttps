@@ -234,10 +234,24 @@ cmd_update() {
   log "Updated $dest"
 }
 
+print_usage() {
+  cat <<EOF
+Usage: localhttps <command> [args]
+
+Commands:
+  use <domain> [port]   Serve https://<domain> -> 127.0.0.1:port (default port 3000)
+  stop [domain]         Stop one domain, or all active domains if omitted
+  list                  Show active domains and their ports
+  update                Update localhttps to the latest version
+  help                  Show this help
+EOF
+}
+
 case "$1" in
-  use)    shift; cmd_use "$@" ;;
-  stop)   shift; cmd_stop "$@" ;;
-  list)   cmd_list ;;
-  update) cmd_update ;;
-  *)      error "Usage: localhttps <use|stop|list|update> ..." ;;
+  use)         shift; cmd_use "$@" ;;
+  stop)        shift; cmd_stop "$@" ;;
+  list)        cmd_list ;;
+  update)      cmd_update ;;
+  help|-h|--help|"") print_usage ;;
+  *)           echo "Unknown command: $1"; echo ""; print_usage; exit 1 ;;
 esac
