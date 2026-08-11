@@ -42,12 +42,16 @@ localhttps stop                        # stop everything
 localhttps stop api.local              # stop just one domain
 localhttps list                        # show active domains and their ports
 localhttps update                      # update the CLI itself to the latest version
+localhttps help                        # show usage
 ```
 
 `localhttps use` automatically: installs mkcert/nginx if missing, adds the domain to
 `/etc/hosts`, generates the certificate (cached in `~/.localhttps/certs`), writes an
 nginx reverse-proxy config, and reloads nginx. Switching port or project is just
 running the command again with new values — nothing to edit by hand.
+
+`localhttps stop` reverses `use` fully: it removes the nginx config, removes the
+`/etc/hosts` entry it added, and reloads nginx — nothing is left behind.
 
 If nginx's config is broken (e.g. a stale conf file left over from manual setup),
 `localhttps use` fails loudly with the real nginx error and, when it can identify
