@@ -199,12 +199,35 @@ cmd_stop() {
 
 cmd_list() {
   [ -f "$STATE_DIR/active_domains" ] || { echo "No active domains."; return; }
-  cat "$STATE_DIR/active_domains"
+  while IFS= read -r d; do
+    local conf; conf="$(conf_path "$d")"
+    local port cat_cmd="cat"
+    [ "$PLATFORM" = "linux" ] && cat_cmd="sudo cat"
+    port=$($cat_cmd "$conf" 2>/dev/null | grep -oE 'proxy_pass http://127\.0\.0\.1:[0-9]+' | grep -oE '[0-9]+$')
+    if [ -n "$port" ]; then
+      echo "$d -> :$port"
+    else
+      echo "$d"
+    fi
+  done < "$STATE_DIR/active_domains"
+}
+
+cmd_update() {
+  local link dest
+  link=$(command -v localhttps) || error "localhttps not found on PATH"
+  dest=$(readlink -f "$link" 2>/dev/null)
+  [ -n "$dest" ] || dest="$link"
+  local tmp="$STATE_DIR/localhttps.new"
+  curl -fsSL "https://raw.githubusercontent.com/realwebthings/localhttps/main/bin/localhttps" -o "$tmp"
+  chmod +x "$tmp"
+  mv "$tmp" "$dest"
+  log "Updated $dest"
 }
 
 case "$1" in
-  use)  shift; cmd_use "$@" ;;
-  stop) shift; cmd_stop "$@" ;;
-  list) cmd_list ;;
-  *)    error "Usage: localhttps <use|stop|list> ..." ;;
+  use)    shift; cmd_use "$@" ;;
+  stop)   shift; cmd_stop "$@" ;;
+  list)   cmd_list ;;
+  update) cmd_update ;;
+  *)      error "Usage: localhttps <use|stop|list|update> ..." ;;
 esac

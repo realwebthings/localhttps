@@ -40,7 +40,8 @@ localhttps use local.thesqua.re 3000   # serve https://local.thesqua.re -> :3000
 localhttps use api.local 4000          # add another domain/port at the same time
 localhttps stop                        # stop everything
 localhttps stop api.local              # stop just one domain
-localhttps list                        # show active domains
+localhttps list                        # show active domains and their ports
+localhttps update                      # update the CLI itself to the latest version
 ```
 
 `localhttps use` automatically: installs mkcert/nginx if missing, adds the domain to
