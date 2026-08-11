@@ -65,5 +65,7 @@ nginx stopped.
   service on Linux. On macOS, nginx itself is run as your normal user, matching how
   Homebrew expects it to be managed
 - Releases are cut by a GitHub Actions workflow ([release.yml](.github/workflows/release.yml))
-  that runs only on pushes to `main`, using the default `GITHUB_TOKEN` scoped to
-  `contents: write` — no long-lived secrets or personal tokens are used
+  that runs only on pushes to `main`. `main` requires a pull request to merge; the
+  workflow's own changelog/tag push uses a scoped `RELEASE_PAT` (repo-only,
+  `Contents: Read and write`) stored as an Actions secret, since branch protection
+  blocks the default `GITHUB_TOKEN` from pushing directly
