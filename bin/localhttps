@@ -5,7 +5,7 @@
 #   localhttps stop [domain]         (stop one domain, or all if omitted)
 #   localhttps list
 
-VERSION="0.0.6"
+VERSION="0.0.7"
 
 set -e
 
