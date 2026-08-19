@@ -6,7 +6,7 @@ Works on macOS, Linux, and Windows using [mkcert](https://github.com/FiloSottile
 
 ## Install
 
-### macOS / Linux
+### macOS / Linux / Linux variants
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/realwebthings/localhttps/main/install.sh | bash
