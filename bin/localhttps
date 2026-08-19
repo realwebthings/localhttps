@@ -117,14 +117,14 @@ ensure_nginx() {
 
 ensure_hosts() {
   local domain="$1"
-  grep -q "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts && return
+  grep -q "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts && return 0
   echo "127.0.0.1 $domain" | sudo tee -a /etc/hosts > /dev/null
   log "Added $domain to /etc/hosts"
 }
 
 remove_hosts() {
   local domain="$1"
-  grep -q "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts || return
+  grep -q "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts || return 0
   grep -v "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts | sudo tee /etc/hosts.new > /dev/null
   sudo cp /etc/hosts.new /etc/hosts
   sudo rm -f /etc/hosts.new
