@@ -1,7 +1,7 @@
 #!/bin/bash
 # localhttps — global CLI to serve any local port on a trusted HTTPS domain.
 # Usage:
-#   localhttps use <domain> [port] [--http2]   (port defaults to 3000, HTTP/1.1 unless --http2)
+#   localhttps use <domain> [port]   (port defaults to 3000)
 #   localhttps stop [domain]         (stop one domain, or all if omitted)
 #   localhttps list
 
@@ -152,17 +152,14 @@ conf_path() {
 }
 
 write_conf() {
-  local domain="$1" port="$2" http2="$3"
+  local domain="$1" port="$2"
   local conf; conf="$(conf_path "$domain")"
   local write_cmd="sudo tee"
   [ "$PLATFORM" = "macos" ] && write_cmd="tee"
 
-  local listen_line="listen 443 ssl;"
-  [ "$http2" = "1" ] && listen_line="listen 443 ssl http2;"
-
   $write_cmd "$conf" > /dev/null <<EOF
 server {
-    $listen_line
+    listen 443 ssl;
     server_name $domain;
 
     ssl_certificate     $CERT_DIR/$domain.pem;
@@ -184,26 +181,14 @@ EOF
 }
 
 cmd_use() {
-  local domain="" port="3000" http2=0
-  local positional=()
-
-  for arg in "$@"; do
-    case "$arg" in
-      --http2) http2=1 ;;
-      *)       positional+=("$arg") ;;
-    esac
-  done
-
-  domain="${positional[0]}"
-  [ -n "${positional[1]:-}" ] && port="${positional[1]}"
-
-  [ -z "$domain" ] && error "Usage: localhttps use <domain> [port] [--http2]"
+  local domain="$1" port="${2:-3000}"
+  [ -z "$domain" ] && error "Usage: localhttps use <domain> [port]"
 
   ensure_mkcert
   ensure_nginx
   ensure_hosts "$domain"
   ensure_cert "$domain"
-  write_conf "$domain" "$port" "$http2"
+  write_conf "$domain" "$port"
   reload_nginx
 
   echo "$domain" >> "$STATE_DIR/active_domains"
@@ -284,7 +269,7 @@ print_usage() {
 Usage: localhttps <command> [args]
 
 Commands:
-  use <domain> [port] [--http2]   Serve https://<domain> -> 127.0.0.1:port (default port 3000, HTTP/1.1 unless --http2)
+  use <domain> [port]   Serve https://<domain> -> 127.0.0.1:port (default port 3000)
   stop [domain]         Stop one domain, or all active domains if omitted
   list                  Show active domains and their ports
   update                Update localhttps to the latest version
