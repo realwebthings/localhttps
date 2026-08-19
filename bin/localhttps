@@ -158,6 +158,7 @@ write_conf() {
   $write_cmd "$conf" > /dev/null <<EOF
 server {
     listen 443 ssl;
+    http2 on;
     server_name $domain;
 
     ssl_certificate     $CERT_DIR/$domain.pem;
