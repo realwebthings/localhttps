@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.6] - 2026-08-19
+
+- Merge branch 'main' of github_realwebthings:realwebthings/localhttps
+All notable changes to this project are documented in this file.
+
 ## [0.0.5] - 2026-08-19
 
 - Merge pull request #5 from realwebthings/setup-pr-required
