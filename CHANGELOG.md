@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.12] - 2026-08-19
+
+- Merge branch 'main' of github_realwebthings:realwebthings/localhttps
+All notable changes to this project are documented in this file.
+
 ## [0.0.11] - 2026-08-19
 
 - Merge branch 'main' of github_realwebthings:realwebthings/localhttps
