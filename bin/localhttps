@@ -159,6 +159,12 @@ write_conf() {
 
   $write_cmd "$conf" > /dev/null <<EOF
 server {
+    listen 80;
+    server_name $domain;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
     listen 443 ssl;
     server_name $domain;
 
