@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.9] - 2026-08-19
+
+- feat: remove HTTP/2 support from 'use' command and update usage instructions
+All notable changes to this project are documented in this file.
+
 ## [0.0.8] - 2026-08-19
 
 - feat: enhance 'use' command to support HTTP/2 option and update usage instructions
