@@ -50,13 +50,19 @@ jobs:
           } > CHANGELOG.md.new
           mv CHANGELOG.md.new CHANGELOG.md
 
+      - name: Bump VERSION in bin/localhttps
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+        run: |
+          sed -i "s/^VERSION=\".*\"/VERSION=\"$NEW_VERSION\"/" bin/localhttps
+
       - name: Commit CHANGELOG
         env:
           NEW_TAG: ${{ steps.version.outputs.new_tag }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md
+          git add CHANGELOG.md bin/localhttps
           git commit -m "chore: release $NEW_TAG [skip release]"
           git push origin HEAD:main
 
