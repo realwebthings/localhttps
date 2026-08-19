@@ -77,6 +77,10 @@ reload_nginx() {
   else
     if pgrep -x nginx &> /dev/null; then
       sudo systemctl reload nginx 2>/dev/null || sudo service nginx reload 2>/dev/null || sudo nginx -s reload
+      # Some systemd/nginx setups report success without actually applying the
+      # new config (observed: reload exits 0 but new listen sockets never bind).
+      # Force a direct SIGHUP as a belt-and-suspenders follow-up.
+      sudo nginx -s reload 2>/dev/null || true
     else
       sudo systemctl start nginx 2>/dev/null || sudo service nginx start 2>/dev/null || sudo nginx
     fi
