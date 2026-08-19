@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.10] - 2026-08-19
+
+- Merge branch 'main' of github_realwebthings:realwebthings/localhttps
+All notable changes to this project are documented in this file.
+
 ## [0.0.9] - 2026-08-19
 
 - feat: remove HTTP/2 support from 'use' command and update usage instructions
