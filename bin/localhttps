@@ -35,9 +35,27 @@ else
   NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
 fi
 
+fix_stale_root_pid() {
+  [ "$PLATFORM" = "macos" ] || return
+  local pid_file="/opt/homebrew/var/run/nginx.pid"
+  [ -f "$pid_file" ] || pid_file="/usr/local/var/run/nginx.pid"
+  [ -f "$pid_file" ] || return
+
+  local owner
+  owner=$(stat -f "%Su" "$pid_file" 2>/dev/null)
+  [ "$owner" = "root" ] || return
+
+  warn "nginx.pid is owned by root (stale from a previous root-run nginx); fixing so it can run as your user..."
+  sudo launchctl bootout system/homebrew.mxcl.nginx 2>/dev/null
+  brew services stop nginx 2>/dev/null
+  sudo rm -f "$pid_file"
+}
+
 reload_nginx() {
   local nginx_test_cmd="sudo nginx"
   [ "$PLATFORM" = "macos" ] && nginx_test_cmd="nginx"
+
+  fix_stale_root_pid
 
   local test_output
   if ! test_output=$($nginx_test_cmd -t 2>&1); then
@@ -53,7 +71,7 @@ reload_nginx() {
   fi
 
   if [ "$PLATFORM" = "macos" ]; then
-    nginx -s reload 2>/dev/null || brew services restart nginx
+    nginx -s reload 2>/dev/null || nginx || brew services restart nginx
   else
     if pgrep -x nginx &> /dev/null; then
       sudo systemctl reload nginx 2>/dev/null || sudo service nginx reload 2>/dev/null || sudo nginx -s reload
@@ -99,14 +117,14 @@ ensure_nginx() {
 
 ensure_hosts() {
   local domain="$1"
-  grep -q "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts && return
+  grep -q "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts && return 0
   echo "127.0.0.1 $domain" | sudo tee -a /etc/hosts > /dev/null
   log "Added $domain to /etc/hosts"
 }
 
 remove_hosts() {
   local domain="$1"
-  grep -q "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts || return
+  grep -q "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts || return 0
   grep -v "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts | sudo tee /etc/hosts.new > /dev/null
   sudo cp /etc/hosts.new /etc/hosts
   sudo rm -f /etc/hosts.new
@@ -140,6 +158,7 @@ write_conf() {
   $write_cmd "$conf" > /dev/null <<EOF
 server {
     listen 443 ssl;
+    http2 on;
     server_name $domain;
 
     ssl_certificate     $CERT_DIR/$domain.pem;
