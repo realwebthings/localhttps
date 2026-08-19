@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.4] - 2026-08-11
+
+- Merge pull request #4 from realwebthings/setup-pr-required
+All notable changes to this project are documented in this file.
+
+## [0.0.3] - 2026-08-11
+
+- Merge pull request #3 from realwebthings/setup-pr-required
+All notable changes to this project are documented in this file.
+
+## [0.0.2] - 2026-08-10
+
+- Merge pull request #2 from realwebthings/setup-pr-required
+All notable changes to this project are documented in this file.
+
+## [0.0.1] - 2026-08-10
+
+- feat: add initial implementation of local-https installer and CLI tool
+All notable changes to this project are documented in this file.
+
 ## [1.0.1] - 2026-08-09
 
 - fix: read prompts from /dev/tty so curl|bash install works, correct install.ps1 repo URL
