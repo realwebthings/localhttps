@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.18] - 2026-09-04
+
+- fix: enhance CHANGELOG generation to include non-merge commits and improve release notes
+
+
 ## [0.0.17] - 2026-09-04
 
 - fix: improve error handling for stale nginx configurations and enhance symlink management
