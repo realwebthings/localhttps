@@ -56,19 +56,16 @@ ensure_port_free() {
   [ "$owner" = "nginx" ] && return
 
   if [ "$owner" = "apache2" ] || [ "$owner" = "httpd" ]; then
-    warn "$owner is already using port $port, which nginx needs."
-    read -r -p "Stop and disable $owner so nginx can start? [y/N] " reply
-    if [[ "$reply" =~ ^[Yy]$ ]]; then
-      if [ "$PLATFORM" = "macos" ]; then
-        sudo apachectl stop
-        sudo launchctl unload -w /System/Library/LaunchDaemons/org.apache.httpd.plist 2>/dev/null
-      else
-        sudo systemctl stop "$owner"
-        sudo systemctl disable "$owner"
-      fi
-      log "Stopped and disabled $owner"
-      return
+    warn "$owner is using port $port, which nginx needs. Stopping $owner..."
+    if [ "$PLATFORM" = "macos" ]; then
+      sudo apachectl stop 2>/dev/null || true
+      sudo launchctl unload -w /System/Library/LaunchDaemons/org.apache.httpd.plist 2>/dev/null || true
+    else
+      sudo systemctl stop "$owner" 2>/dev/null || true
+      sudo systemctl disable "$owner" 2>/dev/null || true
     fi
+    log "Stopped $owner"
+    return
   fi
 
   local stop_hint="sudo systemctl stop $owner"
@@ -83,12 +80,12 @@ fix_stale_root_pid() {
   [ -f "$pid_file" ] || return 0
 
   local owner
-  owner=$(stat -f "%Su" "$pid_file" 2>/dev/null)
+  owner=$(stat -f "%Su" "$pid_file" 2>/dev/null) || return 0
   [ "$owner" = "root" ] || return 0
 
   warn "nginx.pid is owned by root (stale from a previous root-run nginx); fixing so it can run as your user..."
-  sudo launchctl bootout system/homebrew.mxcl.nginx 2>/dev/null
-  brew services stop nginx 2>/dev/null
+  sudo launchctl bootout system/homebrew.mxcl.nginx 2>/dev/null || true
+  brew services stop nginx 2>/dev/null || true
   sudo rm -f "$pid_file"
 }
 
@@ -100,22 +97,45 @@ reload_nginx() {
 
   local test_output
   if ! test_output=$($nginx_test_cmd -t 2>&1); then
-    local missing_path culprit hint=""
+    local missing_path culprit
     missing_path=$(echo "$test_output" | grep -oE '"[^"]+"' | head -n1 | tr -d '"')
     if [ -n "$missing_path" ]; then
       culprit=$(sudo grep -rl "$missing_path" "$NGINX_CONF_DIR" 2>/dev/null | head -n1)
     fi
-    if [ -n "$culprit" ]; then
-      hint="\n\nLikely cause: $culprit references missing path $missing_path\nFix it, or if it's not needed: sudo rm $culprit\nThen retry: localhttps use ..."
+
+    # Auto-heal: if the broken config is one of ours (a stale/corrupt
+    # localhttps-*.conf left behind by a previous failed run), remove it
+    # and retest once rather than leaving the user stuck.
+    if [ -n "$culprit" ] && [[ "$(basename "$culprit")" == localhttps-*.conf ]]; then
+      warn "Removing stale/broken config $culprit and retrying..."
+      local rm_cmd="sudo rm -f"
+      [ "$PLATFORM" = "macos" ] && rm_cmd="rm -f"
+      $rm_cmd "$culprit"
+      if [ "$PLATFORM" = "linux" ]; then
+        sudo rm -f "$NGINX_ENABLED_DIR/$(basename "$culprit")"
+      fi
+      test_output=$($nginx_test_cmd -t 2>&1) || true
     fi
-    error "nginx config is broken, so nothing was (re)started:\n$test_output$hint"
+
+    if ! $nginx_test_cmd -t &>/dev/null; then
+      local hint=""
+      if [ -n "$culprit" ]; then
+        hint="\n\nLikely cause: $culprit references missing path $missing_path\nFix it, or if it's not needed: sudo rm $culprit\nThen retry: localhttps use ..."
+      fi
+      error "nginx config is broken, so nothing was (re)started:\n$test_output$hint"
+    fi
   fi
 
   if [ "$PLATFORM" = "macos" ]; then
     if ! nginx -s reload 2>/dev/null; then
       ensure_port_free 80
       ensure_port_free 443
-      nginx || brew services restart nginx
+      if ! nginx 2>/dev/null && ! brew services restart nginx 2>/dev/null; then
+        local owner80 owner443
+        owner80=$(port_owner 80)
+        owner443=$(port_owner 443)
+        error "nginx failed to start, so nothing was (re)started.\nPort 80 owner: ${owner80:-none}. Port 443 owner: ${owner443:-none}.\nFree the port(s) and retry: localhttps use ..."
+      fi
     fi
   else
     if pgrep -x nginx &> /dev/null; then
@@ -127,14 +147,32 @@ reload_nginx() {
 
       sleep 0.3
       if ! pgrep -x nginx &> /dev/null; then
-        local start_err bad_port owner hint=""
+        # First attempt failed. Diagnose the actual bind failure, auto-stop
+        # whatever's squatting the port, and retry once before giving up.
+        local start_err bad_port owner
         start_err=$(sudo journalctl -u nginx -n 20 --no-pager 2>/dev/null | grep -i "emerg\|bind()")
         bad_port=$(echo "$start_err" | grep -oE 'bind\(\) to [^ ]+:[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+
         if [ -n "$bad_port" ]; then
           owner=$(port_owner "$bad_port")
-          hint="\n\nPort $bad_port is in use by '${owner:-another process}'. Stop it (e.g. sudo systemctl stop $owner) or free the port, then retry: localhttps use ..."
+          if [ -n "$owner" ] && [ "$owner" != "nginx" ]; then
+            warn "nginx failed to start: port $bad_port is held by '$owner'. Stopping it and retrying..."
+            sudo systemctl stop "$owner" 2>/dev/null || sudo service "$owner" stop 2>/dev/null || true
+            sudo systemctl disable "$owner" 2>/dev/null || true
+            sudo systemctl start nginx 2>/dev/null || sudo service nginx start 2>/dev/null || sudo nginx || true
+            sleep 0.3
+          fi
         fi
-        error "nginx failed to start, so nothing was (re)started:\n${start_err:-(no journalctl output available)}$hint"
+
+        if ! pgrep -x nginx &> /dev/null; then
+          start_err=$(sudo journalctl -u nginx -n 20 --no-pager 2>/dev/null | grep -i "emerg\|bind()")
+          local hint=""
+          if [ -n "$bad_port" ]; then
+            owner=$(port_owner "$bad_port")
+            hint="\n\nPort $bad_port is in use by '${owner:-another process}'. Stop it (e.g. sudo systemctl stop $owner) or free the port, then retry: localhttps use ..."
+          fi
+          error "nginx failed to start, so nothing was (re)started:\n${start_err:-(no journalctl output available)}$hint"
+        fi
       fi
     fi
   fi
