@@ -104,10 +104,14 @@ reload_nginx() {
     fi
 
     # Auto-heal: if the broken config is one of ours (a stale/corrupt
-    # localhttps-*.conf left behind by a previous failed run), remove it
-    # and retest once rather than leaving the user stuck.
+    # localhttps-*.conf left behind by a previous failed run, referencing a
+    # cert/path that no longer exists), remove it and retest once rather
+    # than leaving every domain blocked by one broken site.
     if [ -n "$culprit" ] && [[ "$(basename "$culprit")" == localhttps-*.conf ]]; then
-      warn "Removing stale/broken config $culprit and retrying..."
+      local culprit_domain
+      culprit_domain=$(basename "$culprit" .conf)
+      culprit_domain="${culprit_domain#localhttps-}"
+      warn "Config for '$culprit_domain' references a missing file ($missing_path) and is blocking nginx for everyone. Removing it (rerun 'localhttps use $culprit_domain ...' if you still need it) and retrying..."
       local rm_cmd="sudo rm -f"
       [ "$PLATFORM" = "macos" ] && rm_cmd="rm -f"
       $rm_cmd "$culprit"
@@ -274,7 +278,11 @@ EOF
 
   if [ "$PLATFORM" = "linux" ]; then
     sudo mkdir -p "$NGINX_ENABLED_DIR"
-    [ -L "$NGINX_ENABLED_DIR/localhttps-$domain.conf" ] || sudo ln -s "$conf" "$NGINX_ENABLED_DIR/localhttps-$domain.conf"
+    local link="$NGINX_ENABLED_DIR/localhttps-$domain.conf"
+    # Recreate if missing, or if it's a stale symlink pointing elsewhere/nowhere.
+    if [ ! -e "$link" ] || [ "$(readlink "$link" 2>/dev/null)" != "$conf" ]; then
+      sudo ln -sf "$conf" "$link"
+    fi
   fi
 }
 
