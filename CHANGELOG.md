@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.15] - 2026-09-04
+
+- feat: enhance localhttps CLI to support HTTP/2 and improve port management
+All notable changes to this project are documented in this file.
+
 ## [0.0.14] - 2026-09-04
 
 - Merge pull request #6 from realwebthings/abhishesh-laptop
