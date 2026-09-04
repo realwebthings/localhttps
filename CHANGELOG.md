@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.14] - 2026-09-04
+
+- Merge pull request #6 from realwebthings/abhishesh-laptop
+All notable changes to this project are documented in this file.
+
 ## [0.0.13] - 2026-08-21
 
 - revert: restore bin/localhttps to v0.0.7
