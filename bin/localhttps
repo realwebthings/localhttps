@@ -37,6 +37,39 @@ else
   NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
 fi
 
+port_owner() {
+  local port="$1"
+  if [ "$PLATFORM" = "linux" ]; then
+    sudo ss -tlnp 2>/dev/null | grep -E ":$port[[:space:]]" | grep -oE '"[^"]+"' | head -n1 | tr -d '"'
+  else
+    lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR==2{print $1}'
+  fi
+}
+
+ensure_port_free() {
+  [ "$PLATFORM" = "linux" ] || return
+  local port="$1"
+  pgrep -x nginx &> /dev/null && return
+
+  local owner
+  owner=$(port_owner "$port")
+  [ -z "$owner" ] && return
+  [ "$owner" = "nginx" ] && return
+
+  if [ "$owner" = "apache2" ] || [ "$owner" = "httpd" ]; then
+    warn "$owner is already using port $port, which nginx needs."
+    read -r -p "Stop and disable $owner so nginx can start? [y/N] " reply
+    if [[ "$reply" =~ ^[Yy]$ ]]; then
+      sudo systemctl stop "$owner"
+      sudo systemctl disable "$owner"
+      log "Stopped and disabled $owner"
+      return
+    fi
+  fi
+
+  error "Port $port is already in use by '$owner', so nginx cannot start.\nFree it (e.g. sudo systemctl stop $owner) or move $owner to a different port, then retry: localhttps use ..."
+}
+
 fix_stale_root_pid() {
   [ "$PLATFORM" = "macos" ] || return
   local pid_file="/opt/homebrew/var/run/nginx.pid"
@@ -82,7 +115,21 @@ reload_nginx() {
       # Force a direct SIGHUP as a belt-and-suspenders follow-up.
       sudo nginx -s reload 2>/dev/null || true
     else
+      ensure_port_free 80
+      ensure_port_free 443
       sudo systemctl start nginx 2>/dev/null || sudo service nginx start 2>/dev/null || sudo nginx
+
+      sleep 0.3
+      if ! pgrep -x nginx &> /dev/null; then
+        local start_err bad_port owner hint=""
+        start_err=$(sudo journalctl -u nginx -n 20 --no-pager 2>/dev/null | grep -i "emerg\|bind()")
+        bad_port=$(echo "$start_err" | grep -oE 'bind\(\) to [^ ]+:[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+        if [ -n "$bad_port" ]; then
+          owner=$(port_owner "$bad_port")
+          hint="\n\nPort $bad_port is in use by '${owner:-another process}'. Stop it (e.g. sudo systemctl stop $owner) or free the port, then retry: localhttps use ..."
+        fi
+        error "nginx failed to start, so nothing was (re)started:\n${start_err:-(no journalctl output available)}$hint"
+      fi
     fi
   fi
 }
