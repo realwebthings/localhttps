@@ -1,7 +1,7 @@
 #!/bin/bash
 # localhttps — global CLI to serve any local port on a trusted HTTPS domain.
 # Usage:
-#   localhttps use <domain> [port]   (port defaults to 3000)
+#   localhttps use <domain> [port] [--http2]   (port defaults to 3000, HTTP/1.1 unless --http2)
 #   localhttps stop [domain]         (stop one domain, or all if omitted)
 #   localhttps list
 
@@ -47,7 +47,6 @@ port_owner() {
 }
 
 ensure_port_free() {
-  [ "$PLATFORM" = "linux" ] || return
   local port="$1"
   pgrep -x nginx &> /dev/null && return
 
@@ -60,25 +59,32 @@ ensure_port_free() {
     warn "$owner is already using port $port, which nginx needs."
     read -r -p "Stop and disable $owner so nginx can start? [y/N] " reply
     if [[ "$reply" =~ ^[Yy]$ ]]; then
-      sudo systemctl stop "$owner"
-      sudo systemctl disable "$owner"
+      if [ "$PLATFORM" = "macos" ]; then
+        sudo apachectl stop
+        sudo launchctl unload -w /System/Library/LaunchDaemons/org.apache.httpd.plist 2>/dev/null
+      else
+        sudo systemctl stop "$owner"
+        sudo systemctl disable "$owner"
+      fi
       log "Stopped and disabled $owner"
       return
     fi
   fi
 
-  error "Port $port is already in use by '$owner', so nginx cannot start.\nFree it (e.g. sudo systemctl stop $owner) or move $owner to a different port, then retry: localhttps use ..."
+  local stop_hint="sudo systemctl stop $owner"
+  [ "$PLATFORM" = "macos" ] && stop_hint="sudo apachectl stop"
+  error "Port $port is already in use by '$owner', so nginx cannot start.\nFree it (e.g. $stop_hint) or move $owner to a different port, then retry: localhttps use ..."
 }
 
 fix_stale_root_pid() {
-  [ "$PLATFORM" = "macos" ] || return
+  [ "$PLATFORM" = "macos" ] || return 0
   local pid_file="/opt/homebrew/var/run/nginx.pid"
   [ -f "$pid_file" ] || pid_file="/usr/local/var/run/nginx.pid"
-  [ -f "$pid_file" ] || return
+  [ -f "$pid_file" ] || return 0
 
   local owner
   owner=$(stat -f "%Su" "$pid_file" 2>/dev/null)
-  [ "$owner" = "root" ] || return
+  [ "$owner" = "root" ] || return 0
 
   warn "nginx.pid is owned by root (stale from a previous root-run nginx); fixing so it can run as your user..."
   sudo launchctl bootout system/homebrew.mxcl.nginx 2>/dev/null
@@ -106,7 +112,11 @@ reload_nginx() {
   fi
 
   if [ "$PLATFORM" = "macos" ]; then
-    nginx -s reload 2>/dev/null || nginx || brew services restart nginx
+    if ! nginx -s reload 2>/dev/null; then
+      ensure_port_free 80
+      ensure_port_free 443
+      nginx || brew services restart nginx
+    fi
   else
     if pgrep -x nginx &> /dev/null; then
       sudo systemctl reload nginx 2>/dev/null || sudo service nginx reload 2>/dev/null || sudo nginx -s reload
@@ -199,15 +209,17 @@ conf_path() {
 }
 
 write_conf() {
-  local domain="$1" port="$2"
+  local domain="$1" port="$2" http2="$3"
   local conf; conf="$(conf_path "$domain")"
   local write_cmd="sudo tee"
   [ "$PLATFORM" = "macos" ] && write_cmd="tee"
 
+  local listen_line="listen 443 ssl;"
+  [ "$http2" = "1" ] && listen_line="listen 443 ssl http2;"
+
   $write_cmd "$conf" > /dev/null <<EOF
 server {
-    listen 443 ssl;
-    http2 on;
+    $listen_line
     server_name $domain;
 
     ssl_certificate     $CERT_DIR/$domain.pem;
@@ -229,14 +241,25 @@ EOF
 }
 
 cmd_use() {
-  local domain="$1" port="${2:-3000}"
-  [ -z "$domain" ] && error "Usage: localhttps use <domain> [port]"
+  local domain="" port="3000" http2=0 positional=()
+
+  for arg in "$@"; do
+    case "$arg" in
+      --http2) http2=1 ;;
+      *)       positional+=("$arg") ;;
+    esac
+  done
+
+  domain="${positional[0]}"
+  [ -n "${positional[1]:-}" ] && port="${positional[1]}"
+
+  [ -z "$domain" ] && error "Usage: localhttps use <domain> [port] [--http2]"
 
   ensure_mkcert
   ensure_nginx
   ensure_hosts "$domain"
   ensure_cert "$domain"
-  write_conf "$domain" "$port"
+  write_conf "$domain" "$port" "$http2"
   reload_nginx
 
   echo "$domain" >> "$STATE_DIR/active_domains"
@@ -317,7 +340,7 @@ print_usage() {
 Usage: localhttps <command> [args]
 
 Commands:
-  use <domain> [port]   Serve https://<domain> -> 127.0.0.1:port (default port 3000)
+  use <domain> [port] [--http2]   Serve https://<domain> -> 127.0.0.1:port (default port 3000, HTTP/1.1 unless --http2)
   stop [domain]         Stop one domain, or all active domains if omitted
   list                  Show active domains and their ports
   update                Update localhttps to the latest version
