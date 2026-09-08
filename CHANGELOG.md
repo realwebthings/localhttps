@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.2] - 2026-09-08
+
+- feat: add Apache support and enhance CLI for localhttps usage
+
+
 ## [0.0.19] - 2026-09-08
 
 - feat: add Apache support alongside nginx as a reverse-proxy backend
