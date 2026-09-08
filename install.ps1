@@ -126,6 +126,16 @@ if (-not (Get-Command mkcert -ErrorAction SilentlyContinue)) {
   } else {
     Fail "Neither Chocolatey nor Scoop found. Install one from https://chocolatey.org or https://scoop.sh then re-run."
   }
+
+  # The package manager updated PATH for new shells, but this process's own
+  # PATH is stale until refreshed from the registry, so `mkcert` below would
+  # otherwise fail with "command not found" right after a fresh install.
+  $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+              [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+  if (-not (Get-Command mkcert -ErrorAction SilentlyContinue)) {
+    Fail "mkcert was installed but isn't on PATH yet. Close this window, open a new PowerShell (as Administrator), and re-run this script."
+  }
 } else {
   Warn "mkcert already installed - skipping."
 }
@@ -146,11 +156,17 @@ if ((Test-Path "$CERT_DIR\$DOMAIN.pem") -and (Test-Path "$CERT_DIR\$DOMAIN-key.p
 $NGINX_DIR  = "C:\nginx"
 $NGINX_CONF = "$NGINX_DIR\conf\$DOMAIN.conf"
 
+if ($USE_NGINX -match "^[Yy]$" -and -not (Test-Path "$NGINX_DIR\nginx.exe")) {
+  $INSTALL_NGINX = Read-Host "nginx not found. Download and install it now? [y/N]"
+  if ($INSTALL_NGINX -notmatch "^[Yy]$") {
+    Warn "Skipping nginx setup. Your certificate and hosts entry are still in place;"
+    Warn "access your app at https://${DOMAIN}:${APP_PORT} instead."
+    $USE_NGINX = "N"
+  }
+}
+
 if ($USE_NGINX -match "^[Yy]$") {
   if (-not (Test-Path "$NGINX_DIR\nginx.exe")) {
-    $INSTALL_NGINX = Read-Host "nginx not found. Download and install it now? [y/N]"
-    if ($INSTALL_NGINX -notmatch "^[Yy]$") { Fail "nginx is required for port-free access. Aborting." }
-
     $NGINX_VERSION = "1.26.2"
     $NGINX_ZIP     = "$env:TEMP\nginx.zip"
     $NGINX_URL     = "https://nginx.org/download/nginx-$NGINX_VERSION.zip"
