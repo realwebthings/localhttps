@@ -1,11 +1,11 @@
 #!/bin/bash
 # localhttps — global CLI to serve any local port on a trusted HTTPS domain.
 # Usage:
-#   localhttps use <domain> [port] [--http2]   (port defaults to 3000, HTTP/1.1 unless --http2)
+#   localhttps use <domain> [port] [--http2] [--apache|--nginx]   (port defaults to 3000, HTTP/1.1 unless --http2)
 #   localhttps stop [domain]         (stop one domain, or all if omitted)
 #   localhttps list
 
-VERSION="0.0.18"
+VERSION="0.0.19"
 
 set -e
 
@@ -32,10 +32,70 @@ esac
 if [ "$PLATFORM" = "macos" ]; then
   NGINX_CONF_DIR="/opt/homebrew/etc/nginx/servers"
   [ -d "$NGINX_CONF_DIR" ] || NGINX_CONF_DIR="/usr/local/etc/nginx/servers"
+  APACHE_CONF_DIR="/opt/homebrew/etc/httpd/extra/localhttps"
+  [ -d "/opt/homebrew/etc/httpd" ] || APACHE_CONF_DIR="/usr/local/etc/httpd/extra/localhttps"
+  APACHE_MAIN_CONF="/opt/homebrew/etc/httpd/httpd.conf"
+  [ -f "$APACHE_MAIN_CONF" ] || APACHE_MAIN_CONF="/usr/local/etc/httpd/httpd.conf"
 else
   NGINX_CONF_DIR="/etc/nginx/sites-available"
   NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
+  APACHE_CONF_DIR="/etc/apache2/sites-available"
+  APACHE_ENABLED_DIR="/etc/apache2/sites-enabled"
 fi
+
+# Decide which web server localhttps manages:
+#   1. nginx installed        -> nginx
+#   2. no nginx, Apache found -> Apache
+#   3. neither installed      -> install nginx, use nginx
+#   4. both installed         -> ask every time (no caching, since either
+#                                 server's role on the machine can change
+#                                 between calls); pass --apache or --nginx
+#                                 to skip the prompt (e.g. for scripts).
+detect_webserver() {
+  local override="$1"
+
+  local have_nginx=0 have_apache=0
+  command -v nginx &> /dev/null && have_nginx=1
+  if [ "$PLATFORM" = "macos" ]; then
+    if command -v httpd &> /dev/null || command -v apachectl &> /dev/null; then
+      have_apache=1
+    fi
+  else
+    if command -v apache2 &> /dev/null || command -v httpd &> /dev/null; then
+      have_apache=1
+    fi
+  fi
+
+  if [ -n "$override" ]; then
+    WEBSERVER="$override"
+  elif [ "$have_nginx" = "1" ] && [ "$have_apache" = "1" ]; then
+    warn "Both nginx and Apache are installed."
+    read -r -p "Use Apache for this? [y/N] (default: nginx; pass --apache/--nginx to skip this prompt) " reply
+    if [[ "$reply" =~ ^[Yy]$ ]]; then
+      WEBSERVER="apache"
+    else
+      WEBSERVER="nginx"
+    fi
+  elif [ "$have_apache" = "1" ] && [ "$have_nginx" != "1" ]; then
+    WEBSERVER="apache"
+  else
+    WEBSERVER="nginx"
+  fi
+}
+
+# pgrep -x matches zombie (defunct) processes too, which reports a stopped
+# server as still running. Filter those out so stop/start verification is
+# accurate.
+is_running() {
+  local name="$1" pid
+  for pid in $(pgrep -x "$name" 2>/dev/null); do
+    case "$(ps -o stat= -p "$pid" 2>/dev/null)" in
+      Z*) continue ;;
+      *)  return 0 ;;
+    esac
+  done
+  return 1
+}
 
 port_owner() {
   local port="$1"
@@ -48,29 +108,60 @@ port_owner() {
 
 ensure_port_free() {
   local port="$1"
-  pgrep -x nginx &> /dev/null && return
+  local self_bin="nginx"
+  [ "$WEBSERVER" = "apache" ] && self_bin="$(apache_binary)"
+
+  is_running "$self_bin" && return
 
   local owner
   owner=$(port_owner "$port")
   [ -z "$owner" ] && return
-  [ "$owner" = "nginx" ] && return
+  [ "$owner" = "$self_bin" ] && return
 
-  if [ "$owner" = "apache2" ] || [ "$owner" = "httpd" ]; then
-    warn "$owner is using port $port, which nginx needs. Stopping $owner..."
-    if [ "$PLATFORM" = "macos" ]; then
+  # Only the web server we're about to (re)start is safe to auto-stop; a
+  # different, independently-run server (e.g. an unrelated nginx while we're
+  # starting Apache) is left to the user since it's not ours to touch.
+  local known_owners
+  if [ "$WEBSERVER" = "apache" ]; then
+    known_owners="apache2 httpd"
+  else
+    known_owners="nginx"
+  fi
+  if [[ " $known_owners " == *" $owner "* ]]; then
+    warn "$owner is using port $port, which $self_bin needs. Stopping $owner..."
+    if [ "$owner" = "nginx" ]; then
+      if [ "$PLATFORM" = "macos" ]; then
+        nginx -s stop 2>/dev/null || true
+      else
+        sudo systemctl stop nginx 2>/dev/null || sudo service nginx stop 2>/dev/null || true
+        sudo systemctl disable nginx 2>/dev/null || true
+      fi
+    elif [ "$PLATFORM" = "macos" ]; then
       sudo apachectl stop 2>/dev/null || true
       sudo launchctl unload -w /System/Library/LaunchDaemons/org.apache.httpd.plist 2>/dev/null || true
     else
-      sudo systemctl stop "$owner" 2>/dev/null || true
+      sudo systemctl stop "$owner" 2>/dev/null || sudo service "$owner" stop 2>/dev/null || true
       sudo systemctl disable "$owner" 2>/dev/null || true
+    fi
+
+    sleep 0.2
+    if is_running "$owner"; then
+      # systemctl/service either didn't exist or didn't actually stop it
+      # (e.g. no init system). Fall back to killing it directly.
+      sudo pkill -x "$owner" 2>/dev/null || true
+      sleep 0.2
+    fi
+
+    if is_running "$owner"; then
+      error "Tried to stop '$owner' but it's still running, so $self_bin cannot start.\nStop it manually and retry: localhttps use ..."
     fi
     log "Stopped $owner"
     return
   fi
 
   local stop_hint="sudo systemctl stop $owner"
-  [ "$PLATFORM" = "macos" ] && stop_hint="sudo apachectl stop"
-  error "Port $port is already in use by '$owner', so nginx cannot start.\nFree it (e.g. $stop_hint) or move $owner to a different port, then retry: localhttps use ..."
+  [ "$PLATFORM" = "macos" ] && stop_hint="sudo $owner stop"
+  error "Port $port is already in use by '$owner', so $self_bin cannot start.\nFree it (e.g. $stop_hint) or move $owner to a different port, then retry: localhttps use ..."
 }
 
 fix_stale_root_pid() {
@@ -89,18 +180,55 @@ fix_stale_root_pid() {
   sudo rm -f "$pid_file"
 }
 
-reload_nginx() {
-  local nginx_test_cmd="sudo nginx"
-  [ "$PLATFORM" = "macos" ] && nginx_test_cmd="nginx"
+apache_binary() {
+  if [ "$PLATFORM" = "macos" ]; then
+    echo "httpd"
+  elif command -v apache2 &> /dev/null; then
+    echo "apache2"
+  else
+    echo "httpd"
+  fi
+}
 
-  fix_stale_root_pid
+# Same resolution as apache_binary (macOS is always httpd; Linux is apache2 if
+# installed else httpd) — kept as a separate name since call sites use it for
+# systemctl/service commands vs process/pkill targets.
+apache_service_name() {
+  apache_binary
+}
 
-  local test_output
-  if ! test_output=$($nginx_test_cmd -t 2>&1); then
+# Shared implementation for reload_nginx/reload_apache: config test with
+# auto-heal (find a stale localhttps-*.conf referencing a missing path,
+# remove it, retest once), then platform-specific reload-or-start with
+# bind-failure diagnosis (journalctl grep, extract the offending port, stop
+# the port-squatter, retry once). Each web server's own commands, messages
+# and regexes are passed in so behavior is byte-for-byte what it was before.
+#
+# Args:
+#   $1  label          - display name in messages ("nginx" / "Apache")
+#   $2  test_cmd       - config-test command (without the trailing "-t")
+#   $3  conf_dir       - directory to grep for the culprit conf
+#   $4  enabled_dir    - linux sites-enabled dir for the culprit symlink
+#   $5  proc_name      - name used with is_running (nginx bin / apache bin)
+#   $6  svc_name       - systemctl/service unit name (nginx / apache2|httpd)
+#   $7  bad_port_grep  - grep -i pattern to select journalctl lines
+#   $8  bad_port_regex - grep -oE pattern to pull the port out of those lines
+#   $9  macos_reload_cmd - eval'd command to reload in place on macOS
+#   $10 macos_start_cmds - eval'd "||"-joined start attempts on macOS
+#   $11 linux_reload_cmds - eval'd "||"-joined reload attempts on linux
+#   $12 linux_start_cmds  - eval'd "||"-joined start attempts on linux
+_reload_webserver_generic() {
+  local label="$1" test_cmd="$2" conf_dir="$3" enabled_dir="$4" \
+        proc_name="$5" svc_name="$6" bad_port_grep="$7" bad_port_regex="$8" \
+        macos_reload_cmd="$9" macos_start_cmds="${10}" \
+        linux_reload_cmds="${11}" linux_start_cmds="${12}"
+
+  local test_output retest_ok=0
+  if ! test_output=$($test_cmd -t 2>&1); then
     local missing_path culprit
     missing_path=$(echo "$test_output" | grep -oE '"[^"]+"' | head -n1 | tr -d '"')
     if [ -n "$missing_path" ]; then
-      culprit=$(sudo grep -rl "$missing_path" "$NGINX_CONF_DIR" 2>/dev/null | head -n1)
+      culprit=$(sudo grep -rl "$missing_path" "$conf_dir" 2>/dev/null | head -n1)
     fi
 
     # Auto-heal: if the broken config is one of ours (a stale/corrupt
@@ -111,74 +239,124 @@ reload_nginx() {
       local culprit_domain
       culprit_domain=$(basename "$culprit" .conf)
       culprit_domain="${culprit_domain#localhttps-}"
-      warn "Config for '$culprit_domain' references a missing file ($missing_path) and is blocking nginx for everyone. Removing it (rerun 'localhttps use $culprit_domain ...' if you still need it) and retrying..."
+      warn "Config for '$culprit_domain' references a missing file ($missing_path) and is blocking $label for everyone. Removing it (rerun 'localhttps use $culprit_domain ...' if you still need it) and retrying..."
       local rm_cmd="sudo rm -f"
       [ "$PLATFORM" = "macos" ] && rm_cmd="rm -f"
       $rm_cmd "$culprit"
       if [ "$PLATFORM" = "linux" ]; then
-        sudo rm -f "$NGINX_ENABLED_DIR/$(basename "$culprit")"
+        sudo rm -f "$enabled_dir/$(basename "$culprit")"
       fi
-      test_output=$($nginx_test_cmd -t 2>&1) || true
+      test_output=$($test_cmd -t 2>&1) && retest_ok=1 || retest_ok=0
     fi
 
-    if ! $nginx_test_cmd -t &>/dev/null; then
+    if [ "${retest_ok:-0}" != "1" ]; then
       local hint=""
       if [ -n "$culprit" ]; then
         hint="\n\nLikely cause: $culprit references missing path $missing_path\nFix it, or if it's not needed: sudo rm $culprit\nThen retry: localhttps use ..."
       fi
-      error "nginx config is broken, so nothing was (re)started:\n$test_output$hint"
+      error "$label config is broken, so nothing was (re)started:\n$test_output$hint"
     fi
   fi
 
   if [ "$PLATFORM" = "macos" ]; then
-    if ! nginx -s reload 2>/dev/null; then
+    if ! eval "$macos_reload_cmd" 2>/dev/null; then
       ensure_port_free 80
       ensure_port_free 443
-      if ! nginx 2>/dev/null && ! brew services restart nginx 2>/dev/null; then
+      if ! eval "$macos_start_cmds"; then
         local owner80 owner443
         owner80=$(port_owner 80)
         owner443=$(port_owner 443)
-        error "nginx failed to start, so nothing was (re)started.\nPort 80 owner: ${owner80:-none}. Port 443 owner: ${owner443:-none}.\nFree the port(s) and retry: localhttps use ..."
+        error "$label failed to start, so nothing was (re)started.\nPort 80 owner: ${owner80:-none}. Port 443 owner: ${owner443:-none}.\nFree the port(s) and retry: localhttps use ..."
       fi
     fi
   else
-    if pgrep -x nginx &> /dev/null; then
-      sudo systemctl reload nginx 2>/dev/null || sudo service nginx reload 2>/dev/null || sudo nginx -s reload
+    if is_running "$proc_name"; then
+      eval "$linux_reload_cmds"
     else
       ensure_port_free 80
       ensure_port_free 443
-      sudo systemctl start nginx 2>/dev/null || sudo service nginx start 2>/dev/null || sudo nginx
+      eval "$linux_start_cmds"
 
       sleep 0.3
-      if ! pgrep -x nginx &> /dev/null; then
+      if ! is_running "$proc_name"; then
         # First attempt failed. Diagnose the actual bind failure, auto-stop
         # whatever's squatting the port, and retry once before giving up.
         local start_err bad_port owner
-        start_err=$(sudo journalctl -u nginx -n 20 --no-pager 2>/dev/null | grep -i "emerg\|bind()")
-        bad_port=$(echo "$start_err" | grep -oE 'bind\(\) to [^ ]+:[0-9]+' | grep -oE '[0-9]+$' | head -n1)
+        start_err=$(sudo journalctl -u "$svc_name" -n 20 --no-pager 2>/dev/null | grep -i "$bad_port_grep")
+        bad_port=$(echo "$start_err" | grep -oE "$bad_port_regex" | grep -oE '[0-9]+$' | head -n1)
 
         if [ -n "$bad_port" ]; then
           owner=$(port_owner "$bad_port")
-          if [ -n "$owner" ] && [ "$owner" != "nginx" ]; then
-            warn "nginx failed to start: port $bad_port is held by '$owner'. Stopping it and retrying..."
+          if [ -n "$owner" ] && [ "$owner" != "$svc_name" ]; then
+            warn "$label failed to start: port $bad_port is held by '$owner'. Stopping it and retrying..."
             sudo systemctl stop "$owner" 2>/dev/null || sudo service "$owner" stop 2>/dev/null || true
             sudo systemctl disable "$owner" 2>/dev/null || true
-            sudo systemctl start nginx 2>/dev/null || sudo service nginx start 2>/dev/null || sudo nginx || true
+            eval "$linux_start_cmds" || true
             sleep 0.3
           fi
         fi
 
-        if ! pgrep -x nginx &> /dev/null; then
-          start_err=$(sudo journalctl -u nginx -n 20 --no-pager 2>/dev/null | grep -i "emerg\|bind()")
+        if ! is_running "$proc_name"; then
+          start_err=$(sudo journalctl -u "$svc_name" -n 20 --no-pager 2>/dev/null | grep -i "$bad_port_grep")
           local hint=""
           if [ -n "$bad_port" ]; then
             owner=$(port_owner "$bad_port")
             hint="\n\nPort $bad_port is in use by '${owner:-another process}'. Stop it (e.g. sudo systemctl stop $owner) or free the port, then retry: localhttps use ..."
           fi
-          error "nginx failed to start, so nothing was (re)started:\n${start_err:-(no journalctl output available)}$hint"
+          error "$label failed to start, so nothing was (re)started:\n${start_err:-(no journalctl output available)}$hint"
         fi
       fi
     fi
+  fi
+}
+
+reload_nginx() {
+  local nginx_test_cmd="sudo nginx"
+  [ "$PLATFORM" = "macos" ] && nginx_test_cmd="nginx"
+
+  fix_stale_root_pid
+
+  _reload_webserver_generic \
+    "nginx" \
+    "$nginx_test_cmd" \
+    "$NGINX_CONF_DIR" \
+    "$NGINX_ENABLED_DIR" \
+    "nginx" \
+    "nginx" \
+    "emerg\|bind()" \
+    'bind\(\) to [^ ]+:[0-9]+' \
+    'nginx -s reload' \
+    'nginx 2>/dev/null || brew services restart nginx 2>/dev/null' \
+    'sudo systemctl reload nginx 2>/dev/null || sudo service nginx reload 2>/dev/null || sudo nginx -s reload' \
+    'sudo systemctl start nginx 2>/dev/null || sudo service nginx start 2>/dev/null || sudo nginx'
+}
+
+reload_apache() {
+  local bin; bin="$(apache_binary)"
+  local test_cmd="sudo $bin"
+  [ "$PLATFORM" = "macos" ] && test_cmd="$bin"
+  local svc; svc="$(apache_service_name)"
+
+  _reload_webserver_generic \
+    "Apache" \
+    "$test_cmd" \
+    "$APACHE_CONF_DIR" \
+    "$APACHE_ENABLED_DIR" \
+    "$bin" \
+    "$svc" \
+    "could not bind\|address already in use" \
+    ':[0-9]+' \
+    'sudo apachectl graceful' \
+    'sudo apachectl start 2>/dev/null || brew services restart httpd 2>/dev/null' \
+    "sudo systemctl reload \"$svc\" 2>/dev/null || sudo service \"$svc\" reload 2>/dev/null || sudo \"$bin\" -k graceful" \
+    "sudo systemctl start \"$svc\" 2>/dev/null || sudo service \"$svc\" start 2>/dev/null || sudo \"$bin\" -k start"
+}
+
+reload_webserver() {
+  if [ "$WEBSERVER" = "apache" ]; then
+    reload_apache
+  else
+    reload_nginx
   fi
 }
 
@@ -216,6 +394,30 @@ ensure_nginx() {
   fi
 }
 
+ensure_apache() {
+  if [ "$PLATFORM" = "macos" ]; then
+    command -v httpd &> /dev/null && return
+  else
+    { command -v apache2 &> /dev/null || command -v httpd &> /dev/null; } && return
+  fi
+  log "Installing Apache..."
+  if [ "$PLATFORM" = "macos" ]; then
+    brew install httpd
+  else
+    if command -v apt &> /dev/null; then
+      sudo apt install -y apache2
+    else
+      sudo dnf install -y httpd
+    fi
+  fi
+}
+
+ensure_apache_modules() {
+  [ "$PLATFORM" = "linux" ] || return 0
+  command -v a2enmod &> /dev/null || return 0
+  sudo a2enmod ssl proxy proxy_http headers >/dev/null 2>&1 || true
+}
+
 ensure_hosts() {
   local domain="$1"
   grep -q "^127\.0\.0\.1[[:space:]]*$domain\$" /etc/hosts && return 0
@@ -243,16 +445,56 @@ ensure_cert() {
 
 conf_path() {
   local domain="$1"
-  if [ "$PLATFORM" = "macos" ]; then
-    echo "$NGINX_CONF_DIR/localhttps-$domain.conf"
+  if [ "$WEBSERVER" = "apache" ]; then
+    echo "$APACHE_CONF_DIR/localhttps-$domain.conf"
   else
     echo "$NGINX_CONF_DIR/localhttps-$domain.conf"
+  fi
+}
+
+# Find which web server actually manages a given domain, by checking where
+# its conf file lives, rather than asking again. Sets caller-visible globals
+# rather than echoing, since this is called directly (not in a `$(...)`
+# subshell) at both call sites — this also lets it hand back the conf
+# content it already read (to test existence) so a caller that needs the
+# content (cmd_list) doesn't have to cat/sudo-cat the file a second time:
+#   FOUND_WS       - "nginx" / "apache" / "none"
+#   FOUND_CONF     - the resolved conf path (nginx path in the "none" case,
+#                    same sentinel behavior as before)
+#   FOUND_CONTENT  - contents of that conf file ("" in the "none" case)
+find_domain_conf() {
+  local domain="$1"
+  local nginx_conf="$NGINX_CONF_DIR/localhttps-$domain.conf"
+  local apache_conf="$APACHE_CONF_DIR/localhttps-$domain.conf"
+  local cat_cmd="cat"
+  [ "$PLATFORM" = "linux" ] && cat_cmd="sudo cat"
+
+  local content
+  if content=$($cat_cmd "$nginx_conf" 2>/dev/null); then
+    FOUND_WS="nginx"; FOUND_CONF="$nginx_conf"; FOUND_CONTENT="$content"
+  elif content=$($cat_cmd "$apache_conf" 2>/dev/null); then
+    FOUND_WS="apache"; FOUND_CONF="$apache_conf"; FOUND_CONTENT="$content"
+  else
+    # Not found under either (e.g. already removed manually). Report "none"
+    # so callers can skip reload/cleanup for a backend that was never
+    # actually touched, instead of silently guessing nginx.
+    FOUND_WS="none"; FOUND_CONF="$nginx_conf"; FOUND_CONTENT=""
   fi
 }
 
 write_conf() {
   local domain="$1" port="$2" http2="$3"
   local conf; conf="$(conf_path "$domain")"
+
+  if [ "$WEBSERVER" = "apache" ]; then
+    write_conf_apache "$domain" "$port" "$conf"
+  else
+    write_conf_nginx "$domain" "$port" "$http2" "$conf"
+  fi
+}
+
+write_conf_nginx() {
+  local domain="$1" port="$2" http2="$3" conf="$4"
   local write_cmd="sudo tee"
   [ "$PLATFORM" = "macos" ] && write_cmd="tee"
 
@@ -286,27 +528,77 @@ EOF
   fi
 }
 
+write_conf_apache() {
+  local domain="$1" port="$2" conf="$3"
+  local write_cmd="sudo tee"
+  [ "$PLATFORM" = "macos" ] && write_cmd="tee"
+
+  sudo mkdir -p "$(dirname "$conf")" 2>/dev/null || mkdir -p "$(dirname "$conf")" 2>/dev/null || true
+
+  $write_cmd "$conf" > /dev/null <<EOF
+<VirtualHost *:443>
+    ServerName $domain
+
+    SSLEngine on
+    SSLCertificateFile      $CERT_DIR/$domain.pem
+    SSLCertificateKeyFile   $CERT_DIR/$domain-key.pem
+
+    ProxyPreserveHost On
+    ProxyPass        / http://127.0.0.1:$port/
+    ProxyPassReverse / http://127.0.0.1:$port/
+
+    RequestHeader set X-Forwarded-Proto "https"
+</VirtualHost>
+EOF
+
+  if [ "$PLATFORM" = "linux" ]; then
+    if command -v a2ensite &> /dev/null; then
+      sudo a2ensite "$(basename "$conf")" >/dev/null 2>&1 || true
+    else
+      sudo mkdir -p "$APACHE_ENABLED_DIR"
+      local link="$APACHE_ENABLED_DIR/localhttps-$domain.conf"
+      if [ ! -e "$link" ] || [ "$(readlink "$link" 2>/dev/null)" != "$conf" ]; then
+        sudo ln -sf "$conf" "$link"
+      fi
+    fi
+  else
+    # Homebrew httpd has no sites-enabled convention; make sure our conf
+    # directory is Include'd from the main httpd.conf once.
+    if [ -f "$APACHE_MAIN_CONF" ] && ! grep -q "Include $APACHE_CONF_DIR/\*.conf" "$APACHE_MAIN_CONF" 2>/dev/null; then
+      echo "Include $APACHE_CONF_DIR/*.conf" | $write_cmd -a "$APACHE_MAIN_CONF" > /dev/null
+    fi
+  fi
+}
+
 cmd_use() {
-  local domain="" port="3000" http2=0 positional=()
+  local domain="" port="3000" http2=0 override="" positional=()
 
   for arg in "$@"; do
     case "$arg" in
-      --http2) http2=1 ;;
-      *)       positional+=("$arg") ;;
+      --http2)   http2=1 ;;
+      --apache)  override="apache" ;;
+      --nginx)   override="nginx" ;;
+      *)         positional+=("$arg") ;;
     esac
   done
 
   domain="${positional[0]}"
   [ -n "${positional[1]:-}" ] && port="${positional[1]}"
 
-  [ -z "$domain" ] && error "Usage: localhttps use <domain> [port] [--http2]"
+  [ -z "$domain" ] && error "Usage: localhttps use <domain> [port] [--http2] [--apache|--nginx]"
 
   ensure_mkcert
-  ensure_nginx
+  detect_webserver "$override"
+  if [ "$WEBSERVER" = "apache" ]; then
+    ensure_apache
+    ensure_apache_modules
+  else
+    ensure_nginx
+  fi
   ensure_hosts "$domain"
   ensure_cert "$domain"
   write_conf "$domain" "$port" "$http2"
-  reload_nginx
+  reload_webserver
 
   echo "$domain" >> "$STATE_DIR/active_domains"
   sort -u -o "$STATE_DIR/active_domains" "$STATE_DIR/active_domains"
@@ -326,12 +618,21 @@ cmd_stop() {
 
   [ "${#domains_to_stop[@]}" -eq 0 ] && { warn "No active domains to stop."; return; }
 
+  local touched_nginx=0 touched_apache=0
   for d in "${domains_to_stop[@]}"; do
-    local conf; conf="$(conf_path "$d")"
+    find_domain_conf "$d"
+    local domain_ws="$FOUND_WS" conf="$FOUND_CONF"
+    case "$domain_ws" in
+      apache) touched_apache=1 ;;
+      nginx)  touched_nginx=1 ;;
+    esac
     if [ "$PLATFORM" = "macos" ]; then
       rm -f "$conf"
     else
-      sudo rm -f "$conf" "$NGINX_ENABLED_DIR/localhttps-$d.conf"
+      sudo rm -f "$conf" "$NGINX_ENABLED_DIR/localhttps-$d.conf" "$APACHE_ENABLED_DIR/localhttps-$d.conf" 2>/dev/null
+      if command -v a2dissite &> /dev/null; then
+        sudo a2dissite "localhttps-$d.conf" >/dev/null 2>&1 || true
+      fi
     fi
     remove_hosts "$d"
     if [ -f "$STATE_DIR/active_domains" ]; then
@@ -341,18 +642,27 @@ cmd_stop() {
     log "Stopped $d"
   done
 
-  reload_nginx
+  # Reload whichever server(s) actually had a domain removed; a mixed batch
+  # (some domains under nginx, some under Apache) reloads both.
+  if [ "$touched_nginx" = "1" ]; then
+    WEBSERVER="nginx"
+    reload_webserver
+  fi
+  if [ "$touched_apache" = "1" ]; then
+    WEBSERVER="apache"
+    reload_webserver
+  fi
 }
 
 cmd_list() {
   [ -f "$STATE_DIR/active_domains" ] || { echo "No active domains."; return; }
   while IFS= read -r d; do
-    local conf; conf="$(conf_path "$d")"
-    local port cat_cmd="cat"
-    [ "$PLATFORM" = "linux" ] && cat_cmd="sudo cat"
-    port=$($cat_cmd "$conf" 2>/dev/null | grep -oE 'proxy_pass http://127\.0\.0\.1:[0-9]+' | grep -oE '[0-9]+$')
+    find_domain_conf "$d"
+    local domain_ws="$FOUND_WS"
+    local port
+    port=$(echo "$FOUND_CONTENT" | grep -oE '127\.0\.0\.1:[0-9]+' | grep -oE '[0-9]+$' | head -n1)
     if [ -n "$port" ]; then
-      echo "$d -> :$port"
+      echo "$d -> :$port [$domain_ws]"
     else
       echo "$d"
     fi
@@ -386,7 +696,10 @@ print_usage() {
 Usage: localhttps <command> [args]
 
 Commands:
-  use <domain> [port] [--http2]   Serve https://<domain> -> 127.0.0.1:port (default port 3000, HTTP/1.1 unless --http2)
+  use <domain> [port] [--http2] [--apache|--nginx]   Serve https://<domain> -> 127.0.0.1:port
+                        (default port 3000, HTTP/1.1 unless --http2; if both nginx and
+                        Apache are installed you'll be asked which to use unless you pass
+                        --apache or --nginx)
   stop [domain]         Stop one domain, or all active domains if omitted
   list                  Show active domains and their ports
   update                Update localhttps to the latest version

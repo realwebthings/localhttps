@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.19] - 2026-09-08
+
+- feat: add Apache support alongside nginx as a reverse-proxy backend
+- `localhttps use` now accepts `--apache`/`--nginx` to pick the backend explicitly, auto-installing it if missing; auto-detects the right one when only one is installed, and prompts once when both are
+- fix: `ensure_port_free` no longer auto-stops an unrelated, independently-run web server — only the backend actually being started is treated as safe to stop
+- fix: removed a dead validation branch that let `--nginx` silently succeed instead of erroring when neither nginx nor Apache was installed
+- fix: domains whose config file was removed manually are no longer misreported as nginx-owned during `stop`/`list`
+- refactor: collapsed the near-duplicate nginx/Apache reload logic into one shared implementation; removed a redundant config-test re-run on the failure path
+- docs: updated README for Apache support, CLI flags, and backend auto-detection rules
+
 ## [0.0.18] - 2026-09-04
 
 - fix: enhance CHANGELOG generation to include non-merge commits and improve release notes
