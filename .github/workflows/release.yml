@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip release]')"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+          token: ${{ secrets.RELEASE_PAT }}
+
+      - name: Compute next version
+        id: version
+        run: |
+          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="v0.0.0"
+          fi
+          VERSION="${LATEST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "new_tag=v$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Update CHANGELOG.md
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+          LATEST_TAG: ${{ steps.version.outputs.latest_tag }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+
+          # Collect every non-merge commit since the last tag, so a PR with
+          # several feature commits doesn't collapse into one "Merge branch"
+          # line. Fall back to the tip commit if the range is empty (e.g.
+          # a single direct push).
+          RANGE="$LATEST_TAG..HEAD"
+          [ "$LATEST_TAG" = "v0.0.0" ] && RANGE="HEAD"
+          ENTRIES=$(git log "$RANGE" --no-merges --pretty=format:"- %s")
+          [ -n "$ENTRIES" ] || ENTRIES=$(git log -1 --pretty=format:"- %s")
+
+          # Body = everything after the shared header (title + blurb + blank
+          # line); rebuilding the header fresh each time avoids duplicating
+          # it into the body on every release.
+          BODY=$(tail -n +4 CHANGELOG.md 2>/dev/null)
+
+          {
+            echo "# Changelog"
+            echo ""
+            echo "All notable changes to this project are documented in this file."
+            echo ""
+            echo "## [$NEW_VERSION] - $DATE"
+            echo ""
+            echo "$ENTRIES"
+            echo ""
+            echo "$BODY"
+          } > CHANGELOG.md.new
+          mv CHANGELOG.md.new CHANGELOG.md
+
+      - name: Bump VERSION in bin/localhttps
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+        run: |
+          sed -i "s/^VERSION=\".*\"/VERSION=\"$NEW_VERSION\"/" bin/localhttps
+
+      - name: Commit CHANGELOG
+        env:
+          NEW_TAG: ${{ steps.version.outputs.new_tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md bin/localhttps
+          git commit -m "chore: release $NEW_TAG [skip release]"
+          git push origin HEAD:main
+
+      - name: Tag release
+        env:
+          NEW_TAG: ${{ steps.version.outputs.new_tag }}
+        run: |
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_TAG: ${{ steps.version.outputs.new_tag }}
+          LATEST_TAG: ${{ steps.version.outputs.latest_tag }}
+        run: |
+          RANGE="$LATEST_TAG..HEAD"
+          [ "$LATEST_TAG" = "v0.0.0" ] && RANGE="HEAD"
+          NOTES=$(git log "$RANGE" --no-merges --pretty=format:'- %s')
+          [ -n "$NOTES" ] || NOTES=$(git log -1 --pretty=format:'- %s')
+          gh release create "$NEW_TAG" \
+            install.sh install.ps1 bin/localhttps \
+            --title "$NEW_TAG" \
+            --notes "$NOTES"
