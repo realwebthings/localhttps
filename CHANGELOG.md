@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.1] - 2026-09-08
+
+- first commit
+
+
 ## [0.0.18] - 2026-09-04
 
 - fix: enhance CHANGELOG generation to include non-merge commits and improve release notes
