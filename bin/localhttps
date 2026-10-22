@@ -5,7 +5,7 @@
 #   localhttps stop [domain]         (stop one domain, or all if omitted)
 #   localhttps list
 
-VERSION="0.0.19"
+VERSION="0.0.20"
 
 set -e
 
@@ -361,7 +361,10 @@ reload_webserver() {
 }
 
 ensure_mkcert() {
-  command -v mkcert &> /dev/null && return
+  if command -v mkcert &> /dev/null; then
+    [ "$PLATFORM" = "linux" ] && ensure_chrome_trust
+    return
+  fi
   log "Installing mkcert..."
   if [ "$PLATFORM" = "macos" ]; then
     command -v brew &> /dev/null || error "Homebrew required: https://brew.sh"
@@ -378,6 +381,20 @@ ensure_mkcert() {
     sudo mv /tmp/mkcert /usr/local/bin/mkcert
   fi
   mkcert -install
+  [ "$PLATFORM" = "linux" ] && ensure_chrome_trust
+}
+
+# mkcert -install only writes to ~/.pki/nssdb. Newer Chrome on Linux reads its
+# NSS trust store from ~/.local/share/pki/nssdb instead, so the CA mkcert just
+# installed can be invisible to Chrome even though mkcert reports success.
+ensure_chrome_trust() {
+  command -v certutil &> /dev/null || return 0
+  local chrome_db="$HOME/.local/share/pki/nssdb"
+  [ -d "$HOME/.local/share/pki" ] || return 0
+  mkdir -p "$chrome_db"
+  certutil -d "sql:$chrome_db" -L -n "mkcert development CA" &> /dev/null && return 0
+  certutil -d "sql:$chrome_db" -A -t "C,," -n "mkcert development CA" -i "$(mkcert -CAROOT)/rootCA.pem" \
+    && log "Added mkcert CA to Chrome's trust store (restart Chrome to pick it up)"
 }
 
 ensure_nginx() {
@@ -511,6 +528,9 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:$port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-Proto \$scheme;

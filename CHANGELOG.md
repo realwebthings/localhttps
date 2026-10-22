@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.20] - 2026-10-22
+
+- fix: nginx proxy config now forwards WebSocket upgrade headers (`proxy_http_version 1.1`, `Upgrade`/`Connection`), so dev-server HMR (e.g. Next.js webpack-hmr) no longer 404s and force-reloads the page
+- fix: on Linux, mkcert's root CA is now also installed into Chrome's NSS trust store (`~/.local/share/pki/nssdb`), not just the old Firefox-era path — fixes Chrome showing "Not secure" for an otherwise-valid local cert. Runs on first `mkcert -install` and on every subsequent `localhttps use` if Chrome's store doesn't already trust it
+
 ## [0.0.19] - 2026-09-08
 
 - feat: add Apache support alongside nginx as a reverse-proxy backend
