@@ -5,7 +5,7 @@
 #   localhttps stop [domain]         (stop one domain, or all if omitted)
 #   localhttps list
 
-VERSION="0.0.20"
+VERSION="0.0.21"
 
 set -e
 
@@ -499,6 +499,25 @@ find_domain_conf() {
   fi
 }
 
+# Writes $2 (conf body) to $1 (conf path) using $3 (the platform's normal
+# write command). On macOS the normal path is a plain, unprivileged `tee`,
+# since Homebrew dirs are usually user-owned — but a prior root-run service
+# (or a manual `sudo` install) can leave the conf dir root-owned, which makes
+# that plain `tee` fail with "Permission denied" instead of writing the file.
+# Retry once with `sudo tee` in that case rather than failing outright.
+write_conf_file() {
+  local conf="$1" body="$2" write_cmd="$3"
+  local err
+  if err=$($write_cmd "$conf" <<< "$body" 2>&1 > /dev/null); [ -n "$err" ]; then
+    if [ "$PLATFORM" = "macos" ] && [[ "$err" == *"Permission denied"* ]]; then
+      warn "$conf not writable as current user (likely root-owned); retrying with sudo..."
+      sudo tee "$conf" <<< "$body" > /dev/null
+    else
+      error "Failed to write $conf:\n$err"
+    fi
+  fi
+}
+
 write_conf() {
   local domain="$1" port="$2" http2="$3"
   local conf; conf="$(conf_path "$domain")"
@@ -518,7 +537,8 @@ write_conf_nginx() {
   local listen_line="listen 443 ssl;"
   [ "$http2" = "1" ] && listen_line="listen 443 ssl http2;"
 
-  $write_cmd "$conf" > /dev/null <<EOF
+  local conf_body
+  conf_body="$(cat <<EOF
 server {
     $listen_line
     server_name $domain;
@@ -537,6 +557,8 @@ server {
     }
 }
 EOF
+)"
+  write_conf_file "$conf" "$conf_body" "$write_cmd"
 
   if [ "$PLATFORM" = "linux" ]; then
     sudo mkdir -p "$NGINX_ENABLED_DIR"
@@ -555,7 +577,8 @@ write_conf_apache() {
 
   sudo mkdir -p "$(dirname "$conf")" 2>/dev/null || mkdir -p "$(dirname "$conf")" 2>/dev/null || true
 
-  $write_cmd "$conf" > /dev/null <<EOF
+  local conf_body
+  conf_body="$(cat <<EOF
 <VirtualHost *:443>
     ServerName $domain
 
@@ -570,6 +593,8 @@ write_conf_apache() {
     RequestHeader set X-Forwarded-Proto "https"
 </VirtualHost>
 EOF
+)"
+  write_conf_file "$conf" "$conf_body" "$write_cmd"
 
   if [ "$PLATFORM" = "linux" ]; then
     if command -v a2ensite &> /dev/null; then

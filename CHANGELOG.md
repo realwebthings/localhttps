@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.21] - 2026-10-23
+
+- fix: writing the nginx/Apache conf file now auto-retries with `sudo tee` on macOS if the conf directory turns out to be root-owned (e.g. a stale root-run Homebrew service), instead of failing with a raw "Permission denied"
+
 ## [0.0.20] - 2026-10-22
 
 - fix: nginx proxy config now forwards WebSocket upgrade headers (`proxy_http_version 1.1`, `Upgrade`/`Connection`), so dev-server HMR (e.g. Next.js webpack-hmr) no longer 404s and force-reloads the page
