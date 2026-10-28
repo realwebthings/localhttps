@@ -363,7 +363,7 @@ reload_webserver() {
 ensure_mkcert() {
   if command -v mkcert &> /dev/null; then
     [ "$PLATFORM" = "linux" ] && ensure_chrome_trust
-    return
+    return 0
   fi
   log "Installing mkcert..."
   if [ "$PLATFORM" = "macos" ]; then
