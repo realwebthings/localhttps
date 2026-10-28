@@ -2,6 +2,10 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.0.23] - 2026-10-28
+
+- fix: `localhttps update` now does a proper semver comparison instead of a plain inequality check, so a stale CDN edge (raw.githubusercontent.com serving an older file) can no longer silently downgrade an already-newer local install
+
 ## [0.0.22] - 2026-10-28
 
 - fix: `ensure_mkcert`'s early-return path (mkcert already installed) returned the exit status of an unrelated `[ platform = linux ]` test instead of success; under `set -e` this silently killed `localhttps use` on macOS with no error message whenever mkcert was already present

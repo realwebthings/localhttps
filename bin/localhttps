@@ -5,7 +5,7 @@
 #   localhttps stop [domain]         (stop one domain, or all if omitted)
 #   localhttps list
 
-VERSION="0.0.22"
+VERSION="0.0.23"
 
 set -e
 
@@ -714,6 +714,22 @@ cmd_list() {
   done < "$STATE_DIR/active_domains"
 }
 
+# Compares two dotted version strings (e.g. "0.0.22" vs "0.0.21").
+# Echoes: -1 if $1 < $2, 0 if equal, 1 if $1 > $2.
+version_compare() {
+  local v1="$1" v2="$2"
+  [ "$v1" = "$v2" ] && { echo 0; return; }
+  local IFS=.
+  local -a a=($v1) b=($v2)
+  local i
+  for i in 0 1 2; do
+    local n1="${a[$i]:-0}" n2="${b[$i]:-0}"
+    if [ "$n1" -gt "$n2" ] 2>/dev/null; then echo 1; return; fi
+    if [ "$n1" -lt "$n2" ] 2>/dev/null; then echo -1; return; fi
+  done
+  echo 0
+}
+
 cmd_update() {
   local link dest
   link=$(command -v localhttps) || error "localhttps not found on PATH"
@@ -726,14 +742,23 @@ cmd_update() {
   local new_version
   new_version=$(grep -m1 '^VERSION=' "$tmp" | cut -d'"' -f2)
 
-  if [ "$new_version" = "$VERSION" ]; then
+  if [ -z "$new_version" ]; then
+    rm -f "$tmp"
+    error "Could not read version from the fetched file; not updating."
+  fi
+
+  # Compare rather than just checking inequality, so a stale CDN edge (or any
+  # fetch that returns an older file) can never downgrade an install that's
+  # already newer.
+  local cmp; cmp=$(version_compare "$new_version" "$VERSION")
+  if [ "$cmp" -le 0 ]; then
     rm -f "$tmp"
     log "Already up to date (v$VERSION)"
     return
   fi
 
   mv "$tmp" "$dest"
-  log "Updated $dest: v$VERSION -> v${new_version:-unknown}"
+  log "Updated $dest: v$VERSION -> v$new_version"
 }
 
 print_usage() {
